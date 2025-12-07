@@ -1,0 +1,1 @@
+"""VeriAssets Backend Application"""

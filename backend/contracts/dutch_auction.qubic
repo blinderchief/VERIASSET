@@ -1,0 +1,349 @@
+// VeriAssets Dutch Auction IPO Contract
+// Qubic Smart Contract for Nostromo Launchpad
+// Implements decreasing-price Dutch auction mechanism
+
+const MIN_AUCTION_DURATION: u64 = 3600;     // 1 hour minimum
+const MAX_AUCTION_DURATION: u64 = 604800;   // 7 days maximum
+const PLATFORM_FEE_BPS: u64 = 30;           // 0.3% platform fee
+
+enum AuctionStatus {
+    Pending = 0,
+    Active = 1,
+    Finalized = 2,
+    Cancelled = 3,
+}
+
+struct DutchAuction {
+    id: [u8; 32],
+    token_id: [u8; 32],              // RWA token being auctioned
+    creator: [u8; 60],               // Auction creator (asset owner)
+    
+    // Pricing
+    start_price: u64,                // Maximum price (auction starts here)
+    end_price: u64,                  // Minimum price (auction ends here)
+    current_price: u64,              // Current calculated price
+    final_price: u64,                // Clearing price when finalized
+    
+    // Timing
+    start_time: u64,                 // Auction start timestamp
+    end_time: u64,                   // Auction end timestamp
+    
+    // Supply
+    total_tokens: u64,               // Total tokens in auction
+    sold_tokens: u64,                // Tokens sold so far
+    
+    // Statistics
+    total_raised: u64,               // Total QU raised
+    participants: u64,               // Number of unique bidders
+    
+    status: AuctionStatus,
+}
+
+struct Bid {
+    auction_id: [u8; 32],
+    bidder: [u8; 60],
+    price: u64,                      // Bid price per token
+    quantity: u64,                   // Number of tokens
+    timestamp: u64,
+    is_winning: bool,                // Determined at finalization
+}
+
+// Storage
+static mut AUCTIONS: Vec<DutchAuction> = Vec::new();
+static mut BIDS: Vec<Bid> = Vec::new();
+static mut BIDDER_SET: HashMap<[u8; 32], HashSet<[u8; 60]>> = HashMap::new();
+
+// Create a new Dutch auction
+pub fn create_auction(
+    token_id: [u8; 32],
+    start_price: u64,
+    end_price: u64,
+    total_tokens: u64,
+    start_time: u64,
+    end_time: u64,
+) -> [u8; 32] {
+    let caller = get_caller();
+    let now = get_timestamp();
+    
+    // Validations
+    require!(start_price > end_price, "Start price must exceed end price");
+    require!(total_tokens > 0, "Must auction at least 1 token");
+    require!(start_time >= now, "Start time must be in future");
+    require!(end_time > start_time, "End time must be after start");
+    
+    let duration = end_time - start_time;
+    require!(duration >= MIN_AUCTION_DURATION, "Duration too short");
+    require!(duration <= MAX_AUCTION_DURATION, "Duration too long");
+    
+    // Verify caller owns the token and has sufficient balance
+    let token_balance = get_token_balance(token_id, caller);
+    require!(token_balance >= total_tokens, "Insufficient token balance");
+    
+    // Lock tokens for auction
+    lock_tokens(token_id, caller, total_tokens);
+    
+    let auction_id = generate_auction_id();
+    
+    let auction = DutchAuction {
+        id: auction_id,
+        token_id,
+        creator: caller,
+        start_price,
+        end_price,
+        current_price: start_price,
+        final_price: 0,
+        start_time,
+        end_time,
+        total_tokens,
+        sold_tokens: 0,
+        total_raised: 0,
+        participants: 0,
+        status: AuctionStatus::Pending,
+    };
+    
+    unsafe {
+        AUCTIONS.push(auction);
+        BIDDER_SET.insert(auction_id, HashSet::new());
+    }
+    
+    emit_event("AuctionCreated", (auction_id, token_id, start_price, end_price));
+    auction_id
+}
+
+// Place a bid in the Dutch auction
+pub fn place_bid(auction_id: [u8; 32], quantity: u64) -> bool {
+    let caller = get_caller();
+    let now = get_timestamp();
+    
+    let current_price = unsafe {
+        let auction = AUCTIONS.iter_mut()
+            .find(|a| a.id == auction_id)
+            .expect("Auction not found");
+        
+        // Validate auction status
+        if now >= auction.start_time && auction.status == AuctionStatus::Pending {
+            auction.status = AuctionStatus::Active;
+        }
+        
+        require!(auction.status == AuctionStatus::Active, "Auction not active");
+        require!(now < auction.end_time, "Auction has ended");
+        
+        // Check available tokens
+        let available = auction.total_tokens - auction.sold_tokens;
+        require!(quantity <= available, "Not enough tokens available");
+        
+        // Calculate current Dutch auction price
+        let current_price = calculate_current_price(auction);
+        auction.current_price = current_price;
+        
+        // Track participant
+        let bidders = BIDDER_SET.get_mut(&auction_id).unwrap();
+        if !bidders.contains(&caller) {
+            bidders.insert(caller);
+            auction.participants += 1;
+        }
+        
+        current_price
+    };
+    
+    // Calculate total cost
+    let total_cost = current_price * quantity;
+    let fee = (total_cost * PLATFORM_FEE_BPS) / 10000;
+    let total_required = total_cost + fee;
+    
+    // Verify bidder has sufficient QU
+    require!(get_qu_balance(caller) >= total_required, "Insufficient QU balance");
+    
+    // Transfer QU from bidder (held in escrow)
+    transfer_qu_to_escrow(caller, total_required);
+    
+    // Record bid
+    let bid = Bid {
+        auction_id,
+        bidder: caller,
+        price: current_price,
+        quantity,
+        timestamp: now,
+        is_winning: true,  // All bids in Dutch auction are winning at time of bid
+    };
+    
+    unsafe {
+        BIDS.push(bid);
+        
+        // Update auction state
+        let auction = AUCTIONS.iter_mut()
+            .find(|a| a.id == auction_id)
+            .unwrap();
+        
+        auction.sold_tokens += quantity;
+        auction.total_raised += total_cost;
+        
+        // Check if auction is fully subscribed
+        if auction.sold_tokens >= auction.total_tokens {
+            auction.status = AuctionStatus::Finalized;
+            auction.final_price = current_price;
+            distribute_tokens(auction_id);
+        }
+    }
+    
+    emit_event("BidPlaced", (auction_id, caller, current_price, quantity));
+    true
+}
+
+// Calculate current Dutch auction price based on time
+fn calculate_current_price(auction: &DutchAuction) -> u64 {
+    let now = get_timestamp();
+    
+    if now <= auction.start_time {
+        return auction.start_price;
+    }
+    
+    if now >= auction.end_time {
+        return auction.end_price;
+    }
+    
+    let total_duration = auction.end_time - auction.start_time;
+    let elapsed = now - auction.start_time;
+    
+    // Linear price decrease
+    let price_range = auction.start_price - auction.end_price;
+    let price_decrease = (price_range * elapsed) / total_duration;
+    
+    auction.start_price - price_decrease
+}
+
+// Finalize auction (can be called after end_time)
+pub fn finalize_auction(auction_id: [u8; 32]) {
+    let now = get_timestamp();
+    
+    unsafe {
+        let auction = AUCTIONS.iter_mut()
+            .find(|a| a.id == auction_id)
+            .expect("Auction not found");
+        
+        require!(auction.status == AuctionStatus::Active, "Cannot finalize");
+        require!(now >= auction.end_time, "Auction not ended");
+        
+        // Set final price as the end price (minimum)
+        auction.final_price = auction.end_price;
+        auction.status = AuctionStatus::Finalized;
+        
+        // Distribute tokens to all bidders
+        distribute_tokens(auction_id);
+        
+        // Return unsold tokens to creator
+        let unsold = auction.total_tokens - auction.sold_tokens;
+        if unsold > 0 {
+            unlock_tokens(auction.token_id, auction.creator, unsold);
+        }
+        
+        // Calculate fee from total raised
+        let total_fee = (auction.total_raised * PLATFORM_FEE_BPS) / 10000;
+        
+        // Transfer raised funds (minus fee) to creator
+        let creator_proceeds = auction.total_raised - total_fee;
+        transfer_qu_from_escrow(auction.creator, creator_proceeds);
+        
+        // Burn platform fee
+        burn_fee(total_fee);
+        
+        emit_event("AuctionFinalized", (
+            auction_id,
+            auction.final_price,
+            auction.sold_tokens,
+            auction.total_raised
+        ));
+    }
+}
+
+// Distribute tokens to winning bidders
+fn distribute_tokens(auction_id: [u8; 32]) {
+    unsafe {
+        let auction = AUCTIONS.iter()
+            .find(|a| a.id == auction_id)
+            .expect("Auction not found");
+        
+        for bid in BIDS.iter() {
+            if bid.auction_id == auction_id && bid.is_winning {
+                // Transfer tokens from escrow to bidder
+                transfer_tokens_from_escrow(
+                    auction.token_id,
+                    bid.bidder,
+                    bid.quantity
+                );
+                
+                emit_event("TokensDistributed", (bid.bidder, bid.quantity));
+            }
+        }
+    }
+}
+
+// Cancel auction (only by creator, only if not started)
+pub fn cancel_auction(auction_id: [u8; 32]) {
+    let caller = get_caller();
+    let now = get_timestamp();
+    
+    unsafe {
+        let auction = AUCTIONS.iter_mut()
+            .find(|a| a.id == auction_id)
+            .expect("Auction not found");
+        
+        require!(auction.creator == caller, "Not auction creator");
+        require!(auction.status == AuctionStatus::Pending, "Cannot cancel");
+        require!(now < auction.start_time, "Auction already started");
+        
+        auction.status = AuctionStatus::Cancelled;
+        
+        // Return locked tokens to creator
+        unlock_tokens(auction.token_id, auction.creator, auction.total_tokens);
+        
+        emit_event("AuctionCancelled", auction_id);
+    }
+}
+
+// Get auction details
+pub fn get_auction(auction_id: [u8; 32]) -> Option<DutchAuction> {
+    unsafe {
+        AUCTIONS.iter()
+            .find(|a| a.id == auction_id)
+            .map(|a| {
+                let mut auction = a.clone();
+                auction.current_price = calculate_current_price(a);
+                auction
+            })
+    }
+}
+
+// Get all bids for an auction
+pub fn get_auction_bids(auction_id: [u8; 32]) -> Vec<Bid> {
+    unsafe {
+        BIDS.iter()
+            .filter(|b| b.auction_id == auction_id)
+            .cloned()
+            .collect()
+    }
+}
+
+// Get user's bids
+pub fn get_user_bids(user: [u8; 60]) -> Vec<Bid> {
+    unsafe {
+        BIDS.iter()
+            .filter(|b| b.bidder == user)
+            .cloned()
+            .collect()
+    }
+}
+
+// Helper functions (implementation depends on Qubic VM)
+fn get_caller() -> [u8; 60] { [0; 60] }
+fn get_timestamp() -> u64 { 0 }
+fn generate_auction_id() -> [u8; 32] { [0; 32] }
+fn get_token_balance(token_id: [u8; 32], owner: [u8; 60]) -> u64 { 0 }
+fn get_qu_balance(owner: [u8; 60]) -> u64 { 0 }
+fn lock_tokens(token_id: [u8; 32], owner: [u8; 60], amount: u64) {}
+fn unlock_tokens(token_id: [u8; 32], owner: [u8; 60], amount: u64) {}
+fn transfer_qu_to_escrow(from: [u8; 60], amount: u64) {}
+fn transfer_qu_from_escrow(to: [u8; 60], amount: u64) {}
+fn transfer_tokens_from_escrow(token_id: [u8; 32], to: [u8; 60], amount: u64) {}
+fn burn_fee(amount: u64) {}
+fn emit_event<T>(_name: &str, _data: T) {}

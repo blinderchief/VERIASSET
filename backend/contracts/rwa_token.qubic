@@ -1,0 +1,490 @@
+// VeriAssets RWA Token Smart Contract
+// Qubic Smart Contract Template
+// This contract manages tokenized real-world assets on the Qubic network
+
+// Contract Constants
+const CONTRACT_VERSION: u64 = 1;
+const PLATFORM_FEE_BPS: u64 = 30; // 0.3% = 30 basis points
+const MIN_VERIFICATION_SCORE: u64 = 70;
+
+// Asset Types
+enum AssetType {
+    RealEstate = 0,
+    Commodity = 1,
+    Collectible = 2,
+    Financial = 3,
+}
+
+// Asset Status
+enum AssetStatus {
+    Pending = 0,
+    Verified = 1,
+    Trading = 2,
+    Suspended = 3,
+    Retired = 4,
+}
+
+// Data Structures
+struct RWAToken {
+    id: [u8; 32],                    // Unique token identifier
+    asset_type: AssetType,           // Type of underlying asset
+    name: [u8; 64],                  // Asset name
+    symbol: [u8; 8],                 // Trading symbol
+    total_supply: u64,               // Total token supply
+    circulating_supply: u64,         // Currently circulating tokens
+    owner: [u8; 60],                 // Qubic address of asset owner
+    verification_score: u64,         // AI verification score (0-100)
+    status: AssetStatus,             // Current status
+    valuation_usd: u64,              // Total valuation in USD cents
+    created_at: u64,                 // Epoch timestamp
+    metadata_uri: [u8; 256],         // IPFS URI for additional metadata
+}
+
+struct TokenHolder {
+    address: [u8; 60],
+    balance: u64,
+    locked_until: u64,               // Lock expiry timestamp (0 if unlocked)
+}
+
+struct TradeOrder {
+    id: [u8; 32],
+    token_id: [u8; 32],
+    trader: [u8; 60],
+    is_buy: bool,                    // true = buy, false = sell
+    quantity: u64,
+    price_per_token: u64,            // Price in QU (Qubic units)
+    filled_quantity: u64,
+    status: u8,                      // 0=open, 1=filled, 2=cancelled
+    created_at: u64,
+}
+
+// Storage
+static mut TOKENS: Vec<RWAToken> = Vec::new();
+static mut HOLDERS: HashMap<[u8; 32], Vec<TokenHolder>> = HashMap::new();
+static mut ORDERS: Vec<TradeOrder> = Vec::new();
+static mut PLATFORM_TREASURY: [u8; 60] = [0; 60];
+static mut TOTAL_FEES_BURNED: u64 = 0;
+
+// Contract Functions
+
+/// Initialize the contract with platform treasury address
+pub fn initialize(treasury: [u8; 60]) {
+    unsafe {
+        PLATFORM_TREASURY = treasury;
+    }
+}
+
+/// Create a new RWA token
+/// Only callable by verified asset owners
+pub fn create_token(
+    asset_type: AssetType,
+    name: [u8; 64],
+    symbol: [u8; 8],
+    total_supply: u64,
+    valuation_usd: u64,
+    metadata_uri: [u8; 256],
+) -> [u8; 32] {
+    let caller = get_caller();
+    let token_id = generate_token_id();
+    
+    let token = RWAToken {
+        id: token_id,
+        asset_type,
+        name,
+        symbol,
+        total_supply,
+        circulating_supply: 0,
+        owner: caller,
+        verification_score: 0,
+        status: AssetStatus::Pending,
+        valuation_usd,
+        created_at: get_timestamp(),
+        metadata_uri,
+    };
+    
+    unsafe {
+        TOKENS.push(token);
+        
+        // Initialize holder list with owner having all tokens
+        let owner_holding = TokenHolder {
+            address: caller,
+            balance: total_supply,
+            locked_until: 0,
+        };
+        HOLDERS.insert(token_id, vec![owner_holding]);
+    }
+    
+    emit_event("TokenCreated", token_id);
+    token_id
+}
+
+/// Update verification score (oracle callback)
+/// Only callable by authorized AI verification oracle
+pub fn set_verification_score(token_id: [u8; 32], score: u64, verifier: [u8; 60]) {
+    require!(is_authorized_oracle(get_caller()), "Unauthorized");
+    require!(score <= 100, "Score must be 0-100");
+    
+    unsafe {
+        for token in TOKENS.iter_mut() {
+            if token.id == token_id {
+                token.verification_score = score;
+                
+                if score >= MIN_VERIFICATION_SCORE {
+                    token.status = AssetStatus::Verified;
+                }
+                
+                emit_event("VerificationUpdated", token_id);
+                return;
+            }
+        }
+    }
+    
+    require!(false, "Token not found");
+}
+
+/// Enable trading for a verified token
+pub fn enable_trading(token_id: [u8; 32]) {
+    let caller = get_caller();
+    
+    unsafe {
+        for token in TOKENS.iter_mut() {
+            if token.id == token_id {
+                require!(token.owner == caller, "Not token owner");
+                require!(token.status == AssetStatus::Verified, "Not verified");
+                require!(token.verification_score >= MIN_VERIFICATION_SCORE, "Score too low");
+                
+                token.status = AssetStatus::Trading;
+                emit_event("TradingEnabled", token_id);
+                return;
+            }
+        }
+    }
+    
+    require!(false, "Token not found");
+}
+
+/// Transfer tokens between addresses
+pub fn transfer(token_id: [u8; 32], to: [u8; 60], amount: u64) {
+    let caller = get_caller();
+    
+    require!(amount > 0, "Amount must be positive");
+    
+    unsafe {
+        let holders = HOLDERS.get_mut(&token_id).expect("Token not found");
+        
+        // Find sender
+        let mut sender_balance = 0u64;
+        let mut sender_locked = 0u64;
+        for holder in holders.iter() {
+            if holder.address == caller {
+                sender_balance = holder.balance;
+                sender_locked = holder.locked_until;
+                break;
+            }
+        }
+        
+        require!(sender_balance >= amount, "Insufficient balance");
+        require!(sender_locked == 0 || get_timestamp() > sender_locked, "Tokens locked");
+        
+        // Update sender balance
+        for holder in holders.iter_mut() {
+            if holder.address == caller {
+                holder.balance -= amount;
+                break;
+            }
+        }
+        
+        // Update or add recipient
+        let mut found_recipient = false;
+        for holder in holders.iter_mut() {
+            if holder.address == to {
+                holder.balance += amount;
+                found_recipient = true;
+                break;
+            }
+        }
+        
+        if !found_recipient {
+            holders.push(TokenHolder {
+                address: to,
+                balance: amount,
+                locked_until: 0,
+            });
+        }
+    }
+    
+    emit_event("Transfer", (caller, to, amount));
+}
+
+/// Create a buy/sell order
+pub fn create_order(
+    token_id: [u8; 32],
+    is_buy: bool,
+    quantity: u64,
+    price_per_token: u64,
+) -> [u8; 32] {
+    let caller = get_caller();
+    
+    require!(quantity > 0, "Quantity must be positive");
+    require!(price_per_token > 0, "Price must be positive");
+    
+    // Verify token is tradeable
+    unsafe {
+        let token = TOKENS.iter().find(|t| t.id == token_id).expect("Token not found");
+        require!(token.status == AssetStatus::Trading, "Trading not enabled");
+    }
+    
+    // For sell orders, verify seller has enough tokens
+    if !is_buy {
+        let balance = get_balance(token_id, caller);
+        require!(balance >= quantity, "Insufficient token balance");
+    }
+    
+    let order_id = generate_order_id();
+    
+    let order = TradeOrder {
+        id: order_id,
+        token_id,
+        trader: caller,
+        is_buy,
+        quantity,
+        price_per_token,
+        filled_quantity: 0,
+        status: 0,
+        created_at: get_timestamp(),
+    };
+    
+    unsafe {
+        ORDERS.push(order);
+    }
+    
+    emit_event("OrderCreated", order_id);
+    
+    // Try to match with existing orders
+    try_match_order(order_id);
+    
+    order_id
+}
+
+/// Execute a trade (match buy and sell orders)
+fn try_match_order(new_order_id: [u8; 32]) {
+    unsafe {
+        let mut new_order = ORDERS.iter_mut().find(|o| o.id == new_order_id).unwrap();
+        
+        // Find matching orders
+        for order in ORDERS.iter_mut() {
+            if order.id == new_order_id { continue; }
+            if order.token_id != new_order.token_id { continue; }
+            if order.status != 0 { continue; }
+            if order.is_buy == new_order.is_buy { continue; }
+            
+            // Check price compatibility
+            let can_match = if new_order.is_buy {
+                new_order.price_per_token >= order.price_per_token
+            } else {
+                new_order.price_per_token <= order.price_per_token
+            };
+            
+            if can_match {
+                let remaining_new = new_order.quantity - new_order.filled_quantity;
+                let remaining_existing = order.quantity - order.filled_quantity;
+                let fill_quantity = remaining_new.min(remaining_existing);
+                
+                // Execute price is the older order's price (price-time priority)
+                let execution_price = order.price_per_token;
+                let total_value = fill_quantity * execution_price;
+                
+                // Calculate platform fee (0.3%)
+                let fee = (total_value * PLATFORM_FEE_BPS) / 10000;
+                
+                // Determine buyer and seller
+                let (buyer, seller) = if new_order.is_buy {
+                    (new_order.trader, order.trader)
+                } else {
+                    (order.trader, new_order.trader)
+                };
+                
+                // Transfer tokens from seller to buyer
+                transfer_internal(new_order.token_id, seller, buyer, fill_quantity);
+                
+                // Transfer payment (minus fee) from buyer to seller
+                let payment = total_value - fee;
+                transfer_qu(buyer, seller, payment);
+                
+                // Burn the fee (deflationary mechanism)
+                burn_fee(fee);
+                
+                // Update fill quantities
+                new_order.filled_quantity += fill_quantity;
+                order.filled_quantity += fill_quantity;
+                
+                // Update order statuses
+                if new_order.filled_quantity >= new_order.quantity {
+                    new_order.status = 1; // filled
+                }
+                if order.filled_quantity >= order.quantity {
+                    order.status = 1; // filled
+                }
+                
+                emit_event("TradeExecuted", (
+                    new_order.token_id,
+                    buyer,
+                    seller,
+                    fill_quantity,
+                    execution_price,
+                    fee
+                ));
+                
+                if new_order.status == 1 {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Cancel an open order
+pub fn cancel_order(order_id: [u8; 32]) {
+    let caller = get_caller();
+    
+    unsafe {
+        for order in ORDERS.iter_mut() {
+            if order.id == order_id {
+                require!(order.trader == caller, "Not order owner");
+                require!(order.status == 0, "Order not open");
+                
+                order.status = 2; // cancelled
+                emit_event("OrderCancelled", order_id);
+                return;
+            }
+        }
+    }
+    
+    require!(false, "Order not found");
+}
+
+/// Burn platform fees (deflationary mechanism)
+fn burn_fee(amount: u64) {
+    unsafe {
+        TOTAL_FEES_BURNED += amount;
+    }
+    emit_event("FeeBurned", amount);
+}
+
+// Helper Functions
+
+fn get_balance(token_id: [u8; 32], address: [u8; 60]) -> u64 {
+    unsafe {
+        if let Some(holders) = HOLDERS.get(&token_id) {
+            for holder in holders {
+                if holder.address == address {
+                    return holder.balance;
+                }
+            }
+        }
+    }
+    0
+}
+
+fn transfer_internal(token_id: [u8; 32], from: [u8; 60], to: [u8; 60], amount: u64) {
+    // Internal transfer without lock checks (for trade execution)
+    unsafe {
+        let holders = HOLDERS.get_mut(&token_id).expect("Token not found");
+        
+        for holder in holders.iter_mut() {
+            if holder.address == from {
+                holder.balance -= amount;
+                break;
+            }
+        }
+        
+        let mut found = false;
+        for holder in holders.iter_mut() {
+            if holder.address == to {
+                holder.balance += amount;
+                found = true;
+                break;
+            }
+        }
+        
+        if !found {
+            holders.push(TokenHolder {
+                address: to,
+                balance: amount,
+                locked_until: 0,
+            });
+        }
+    }
+}
+
+fn generate_token_id() -> [u8; 32] {
+    // Generate unique token ID using timestamp and randomness
+    // Implementation depends on Qubic VM capabilities
+    [0; 32] // Placeholder
+}
+
+fn generate_order_id() -> [u8; 32] {
+    [0; 32] // Placeholder
+}
+
+fn get_caller() -> [u8; 60] {
+    // Get calling address from Qubic VM
+    [0; 60] // Placeholder
+}
+
+fn get_timestamp() -> u64 {
+    // Get current epoch from Qubic VM
+    0 // Placeholder
+}
+
+fn is_authorized_oracle(address: [u8; 60]) -> bool {
+    // Check if address is authorized AI verification oracle
+    true // Placeholder
+}
+
+fn transfer_qu(_from: [u8; 60], _to: [u8; 60], _amount: u64) {
+    // Transfer QU (Qubic native currency)
+    // Implementation depends on Qubic VM
+}
+
+fn emit_event<T>(_name: &str, _data: T) {
+    // Emit event for indexers and frontends
+}
+
+// View Functions
+
+/// Get token information
+pub fn get_token(token_id: [u8; 32]) -> Option<RWAToken> {
+    unsafe {
+        TOKENS.iter().find(|t| t.id == token_id).cloned()
+    }
+}
+
+/// Get all open orders for a token
+pub fn get_order_book(token_id: [u8; 32]) -> (Vec<TradeOrder>, Vec<TradeOrder>) {
+    unsafe {
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+        
+        for order in ORDERS.iter() {
+            if order.token_id == token_id && order.status == 0 {
+                if order.is_buy {
+                    bids.push(order.clone());
+                } else {
+                    asks.push(order.clone());
+                }
+            }
+        }
+        
+        // Sort bids descending, asks ascending
+        bids.sort_by(|a, b| b.price_per_token.cmp(&a.price_per_token));
+        asks.sort_by(|a, b| a.price_per_token.cmp(&b.price_per_token));
+        
+        (bids, asks)
+    }
+}
+
+/// Get total burned fees
+pub fn get_total_fees_burned() -> u64 {
+    unsafe { TOTAL_FEES_BURNED }
+}

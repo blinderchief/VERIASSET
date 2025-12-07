@@ -1,0 +1,178 @@
+{
+  "name": "VeriAssets Integration",
+  "description": "Connect VeriAssets RWA Marketplace events to your automation workflows",
+  "version": "1.0.0",
+  "events": [
+    {
+      "id": "asset.created",
+      "name": "New Asset Created",
+      "description": "Triggered when a new RWA asset is tokenized",
+      "payload": {
+        "asset_id": "string",
+        "name": "string",
+        "asset_type": "string",
+        "valuation": "number",
+        "total_supply": "number",
+        "owner_id": "string",
+        "created_at": "string"
+      }
+    },
+    {
+      "id": "asset.verified",
+      "name": "Asset Verified",
+      "description": "Triggered when AI verification completes",
+      "payload": {
+        "asset_id": "string",
+        "name": "string",
+        "verification_score": "number",
+        "verification_status": "string",
+        "verified_by": "string",
+        "verified_at": "string"
+      }
+    },
+    {
+      "id": "trade.created",
+      "name": "Trade Order Created",
+      "description": "Triggered when a new buy/sell order is placed",
+      "payload": {
+        "order_id": "string",
+        "asset_id": "string",
+        "user_id": "string",
+        "order_type": "string",
+        "quantity": "number",
+        "price": "number",
+        "total_value": "number",
+        "created_at": "string"
+      }
+    },
+    {
+      "id": "trade.executed",
+      "name": "Trade Executed",
+      "description": "Triggered when a trade is executed on Qubic",
+      "payload": {
+        "order_id": "string",
+        "asset_id": "string",
+        "buyer_id": "string",
+        "seller_id": "string",
+        "quantity": "number",
+        "execution_price": "number",
+        "qubic_tx_id": "string",
+        "fee_burned": "number",
+        "executed_at": "string"
+      }
+    },
+    {
+      "id": "trade.cancelled",
+      "name": "Trade Cancelled",
+      "description": "Triggered when an order is cancelled",
+      "payload": {
+        "order_id": "string",
+        "asset_id": "string",
+        "user_id": "string",
+        "cancelled_at": "string"
+      }
+    },
+    {
+      "id": "ipo.created",
+      "name": "IPO Created",
+      "description": "Triggered when a new Dutch auction IPO starts",
+      "payload": {
+        "ipo_id": "string",
+        "asset_id": "string",
+        "asset_name": "string",
+        "max_price": "number",
+        "min_price": "number",
+        "total_tokens": "number",
+        "start_time": "string",
+        "end_time": "string"
+      }
+    },
+    {
+      "id": "ipo.bid_placed",
+      "name": "IPO Bid Placed",
+      "description": "Triggered when a bid is placed on an IPO",
+      "payload": {
+        "ipo_id": "string",
+        "user_id": "string",
+        "bid_price": "number",
+        "quantity": "number",
+        "current_auction_price": "number",
+        "timestamp": "string"
+      }
+    },
+    {
+      "id": "ipo.finalized",
+      "name": "IPO Finalized",
+      "description": "Triggered when Dutch auction ends and tokens are distributed",
+      "payload": {
+        "ipo_id": "string",
+        "asset_id": "string",
+        "final_price": "number",
+        "tokens_sold": "number",
+        "total_raised": "number",
+        "participants": "number",
+        "finalized_at": "string"
+      }
+    },
+    {
+      "id": "proposal.created",
+      "name": "Governance Proposal Created",
+      "description": "Triggered when a new governance proposal is created",
+      "payload": {
+        "proposal_id": "string",
+        "title": "string",
+        "category": "string",
+        "proposer_id": "string",
+        "quorum_required": "number",
+        "voting_ends_at": "string"
+      }
+    },
+    {
+      "id": "proposal.vote_cast",
+      "name": "Vote Cast",
+      "description": "Triggered when a user votes on a proposal",
+      "payload": {
+        "proposal_id": "string",
+        "user_id": "string",
+        "vote": "string",
+        "voting_power": "number",
+        "timestamp": "string"
+      }
+    },
+    {
+      "id": "proposal.finalized",
+      "name": "Proposal Finalized",
+      "description": "Triggered when voting ends on a proposal",
+      "payload": {
+        "proposal_id": "string",
+        "result": "string",
+        "votes_for": "number",
+        "votes_against": "number",
+        "total_voters": "number",
+        "quorum_reached": "boolean"
+      }
+    }
+  ],
+  "actions": [
+    {
+      "id": "send_notification",
+      "name": "Send Notification",
+      "description": "Send a notification to users"
+    },
+    {
+      "id": "trigger_verification",
+      "name": "Trigger AI Verification",
+      "description": "Request AI verification for an asset"
+    },
+    {
+      "id": "create_report",
+      "name": "Generate Report",
+      "description": "Generate a marketplace report"
+    }
+  ],
+  "authentication": {
+    "type": "api_key",
+    "header": "X-EasyConnect-Key"
+  },
+  "baseUrl": "${VERIASSETS_API_URL}/api/v1/webhooks/easyconnect"
+}
