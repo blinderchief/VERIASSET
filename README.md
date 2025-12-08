@@ -10,10 +10,10 @@
 
 **AI-Verified Real-World Asset Marketplace & Launchpad on Qubic**
 
-<p align="center">
+<div align="center">
 [![Built for Qubic Hackathon](https://img.shields.io/badge/Built%20for-Qubic%20Hackathon-00D4AA?style=for-the-badge)](https://qubic.org)
 [![Nostromo Track](https://img.shields.io/badge/Track-Nostromo%20Launchpad-6366F1?style=for-the-badge)](https://qubic.org)
-</p>
+</div>
 
 
 
