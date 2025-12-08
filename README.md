@@ -1,5 +1,13 @@
 # VeriAssets 🏦✨
 
+<p align="center">
+  <img src="cover-banner.svg" alt="VeriAssets Cover Banner" width="100%">
+</p>
+
+<p align="center">
+  <img src="logo.svg" alt="VeriAssets Logo" width="200">
+</p>
+
 **AI-Verified Real-World Asset Marketplace & Launchpad on Qubic**
 
 [![Built for Qubic Hackathon](https://img.shields.io/badge/Built%20for-Qubic%20Hackathon-00D4AA?style=for-the-badge)](https://qubic.org)

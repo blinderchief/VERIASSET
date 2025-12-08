@@ -1,0 +1,29 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="95" fill="#1f2937" stroke="#6366f1" stroke-width="5"/>
+  
+  <!-- Asset representation (building) -->
+  <rect x="60" y="80" width="80" height="60" fill="#6366f1" rx="5"/>
+  <rect x="70" y="90" width="15" height="20" fill="#ffffff"/>
+  <rect x="90" y="90" width="15" height="20" fill="#ffffff"/>
+  <rect x="110" y="90" width="15" height="20" fill="#ffffff"/>
+  <rect x="70" y="115" width="15" height="20" fill="#ffffff"/>
+  <rect x="90" y="115" width="15" height="20" fill="#ffffff"/>
+  <rect x="110" y="115" width="15" height="20" fill="#ffffff"/>
+  
+  <!-- Verification checkmark -->
+  <path d="M 140 60 L 150 70 L 170 50" stroke="#00d4aa" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Blockchain links -->
+  <circle cx="50" cy="50" r="8" fill="#6366f1"/>
+  <circle cx="150" cy="50" r="8" fill="#6366f1"/>
+  <circle cx="50" cy="150" r="8" fill="#6366f1"/>
+  <circle cx="150" cy="150" r="8" fill="#6366f1"/>
+  <line x1="50" y1="50" x2="150" y2="50" stroke="#6366f1" stroke-width="3"/>
+  <line x1="50" y1="50" x2="50" y2="150" stroke="#6366f1" stroke-width="3"/>
+  <line x1="150" y1="50" x2="150" y2="150" stroke="#6366f1" stroke-width="3"/>
+  <line x1="50" y1="150" x2="150" y2="150" stroke="#6366f1" stroke-width="3"/>
+  
+  <!-- Text -->
+  <text x="100" y="185" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-size="16" font-weight="bold">VeriAsset</text>
+</svg>
