@@ -1,17 +1,21 @@
 # VeriAssets 🏦✨
 
 <p align="center">
-  <img src="cover-banner.svg" alt="VeriAssets Cover Banner" width="100%">
+  <img src="https://raw.githubusercontent.com/blinderchief/VERIASSET/main/cover-banner.svg" alt="VeriAssets Cover Banner" width="100%">
 </p>
 
 <p align="center">
-  <img src="logo.svg" alt="VeriAssets Logo" width="200">
+  <img src="https://raw.githubusercontent.com/blinderchief/VERIASSET/main/logo.svg" alt="VeriAssets Logo" width="200">
 </p>
 
 **AI-Verified Real-World Asset Marketplace & Launchpad on Qubic**
 
+<p align="center">
 [![Built for Qubic Hackathon](https://img.shields.io/badge/Built%20for-Qubic%20Hackathon-00D4AA?style=for-the-badge)](https://qubic.org)
 [![Nostromo Track](https://img.shields.io/badge/Track-Nostromo%20Launchpad-6366F1?style=for-the-badge)](https://qubic.org)
+</p>
+
+
 
 ---
 
